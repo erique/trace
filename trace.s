@@ -64,12 +64,17 @@
 ;
 ; CCR = 0
 ;
+		jmp	S
 
-START_OPCODE	= $d000
-OPCODE_COUNT	= $1 ;fc2
+START_OPCODE	= $0000
+OPCODE_COUNT	= $10000
 
-BASE_ADDRESS	= $50000
 REG_An_DELTA	= $100
+
+	section data,bss_c
+ReservedMem	ds.b	REG_An_DELTA*$10
+
+BASE_ADDRESS	= ReservedMem ;$50000
 
 REG_D0 = $00000000
 REG_D1 = $11112233
@@ -90,7 +95,9 @@ REG_A7 = BASE_ADDRESS+REG_An_DELTA*7
 REG_USP= BASE_ADDRESS+REG_An_DELTA*8
 
 
-		bra.b	S
+;		bra.b	S
+	section code,code_f
+
 
 ZeroVBRAmiga	pea	.cleanup(pc)
 		pea	S(pc)
@@ -123,21 +130,16 @@ S
 		
 ;		move.l	#Super,$80.w
 ;		trap	#0			; switch to super
-		bsr.b	Super
 
 
-		rts
+;		rts
 
 
-Super:
-;		move.w	#$2700,sr
-
-;		moveq.l	#0,d0
-;		movec	d0,cacr			; all caches off
+;Super:
 
 		move.l	#START_OPCODE,d0	; start opcode
 		move.l	#OPCODE_COUNT-1,d7
-		lea	Results(pc),a4
+		lea	Results,a4
 
 .writeOp	move.w	d0,p
 		move.w	d0,$dff180
@@ -147,10 +149,9 @@ Super:
 
 		move.w	InstructionSize(pc),d1
 		beq.b	.notLegal
-		move.w	d0,WTF
 		move.w	d0,(a4)+
-		subq.w	#2,d1
-		adda.w	d1,a4
+;		subq.w	#2,d1
+;		adda.w	d1,a4
 
 .notLegal
 		addq.l	#1,d0
@@ -158,7 +159,6 @@ Super:
 
 		rts
 
-WTF	dc.w	0
 
 ;
 ;		lea	$0.w,a0			; assume VBR = 0
@@ -299,51 +299,39 @@ WTF	dc.w	0
 ;	movem.l	(sp)+,d0-a6
 ;	jmp	next
 ;	rts
-		rts
-
-c:	dc.w	0
-
-
+;		rts
 
 E:
 		even
 
 
-; Execute:
-; 1. TRAP to super
-; 2. SR = $2700
-; 3. Store RTE address
 
+Execute:
+		move.w	#$2700,sr
 
+		movem.l	d0-a6,-(sp)
+		move.l	a7,SuperStack
 
-Execute:	; Executes in SUPER
-		or.w	#0700,sr
+		move.l	USP,a0
+		move.l	a0,UserStack
+
 		moveq.l	#0,d0
 		movec	d0,cacr			; all caches off
 
-
-
-		movem.l	d0-a6,-(sp)
-		move.l	usp,a0
-		move.l	a0,-(sp)
-		move.l	sp,SuperStack
-
 		bsr.w	SaveVectors
-
 		bsr.w	SetupExceptionHandlers
 		bsr.w	ClearMemory
 		bsr.w	ClearState
 		bsr.w	SetupRegisters
 ;		or	#$8000,sr		; enable trace
 ;		and	#$dfff,sr
-		eor	#$8000,sr
+		eor	#$a000,sr		; enable trace + switch to usermode
 ;		nop
 
 p:		dc.l	0,0,0,0,0
 
 
-Cleanup:	; Executes in SUPER
-
+Cleanup:	
 		; compare Dn + An + USP
 		; Dx.l + Ax.l + USP.l
 		; SR.w + EX.w + PC.w
@@ -365,7 +353,7 @@ Cleanup:	; Executes in SUPER
 		move.l	a5,RegState_A5
 		move.l	a6,RegState_A6
 		move.l	a7,RegState_A7
-		move.l	usp,a0
+		move.l	USP,a0
 		move.l	a0,RegState_USP
 
 		move.l	ProgramCounter(pc),d0
@@ -374,26 +362,18 @@ Cleanup:	; Executes in SUPER
 
 		bsr.w	RestoreVectors
 
-		move.l	SuperStack(pc),sp
-		move.l	(sp)+,a0
-		move.l	a0,usp
+		move.l	UserStack(pc),a0
+		move.l	a0,USP
+
+		move.l	SuperStack(pc),a7
 		movem.l	(sp)+,d0-a6
-		move.w	(sp),DUMMY
-		move.l	2(sp),DUMMY2
 		rte
 
-ReturnAddress	dc.l	0
-		ds.l	64
-ExecuteStack
-
 DUMMY		dc.w	0
-DUMMY2		dc.l	0
-
-
-
-
 
 SuperStack	dc.l	0
+UserStack	dc.l	0
+
 
 ClearState	lea	State(pc),a0
 		moveq.l	#(StateEnd-State)/4-1,d7
@@ -406,6 +386,7 @@ State:
 VectorState:	dc.l	0
 TrapState:	dc.w	0
 StatusRegister	dc.w	0
+ProgramCounter:	dc.l	0
 RegState_D0	dc.l	0
 RegState_D1	dc.l	0
 RegState_D2	dc.l	0
@@ -423,7 +404,6 @@ RegState_A5	dc.l	0
 RegState_A6	dc.l	0
 RegState_A7	dc.l	0
 RegState_USP	dc.l	0
-ProgramCounter:	dc.l	0
 InstructionSize:dc.w	0
 		cnop	0,4
 StateEnd:
@@ -484,8 +464,8 @@ ClearMemory:	move.w	#REG_An_DELTA/4-1,d7
 		move.l	d0,(a4)+
 		move.l	d0,(a5)+
 		move.l	d0,(a6)+
-		move.l	d0,(a7)+
-		move.l	d0,(a7)+
+		move.l	d0,(a7)+	; USP
+		move.l	d0,(a7)+	; SSP
 	endr
 		dbf	d7,.clear
 		movea.l	d1,a7
@@ -510,12 +490,15 @@ SystemVectors:	ds.l	32+16
 
 SetupExceptionHandlers:
 
-;		lea	$0.w,a0
+		lea	$0.w,a0
+
 ;		moveq.l	#12-1,d7
 ;		lea	Vector0(pc),a1
 ;.initVectors:	move.l	a1,(a0)+
 ;		adda.w	#Vector1-Vector0,a1		
 ;		dbf	d7,.initVectors
+
+		lea	$80.w,a0
 
 		moveq.l	#16-1,d7
 		lea	Trap0(pc),a1
@@ -525,7 +508,13 @@ SetupExceptionHandlers:
 
 ;		move.l	SystemVectors+31*4,31*4
 
+		move.l	#Vector2,(2*4).w			; bus
+		move.l	#Vector3,(3*4).w			; address
 		move.l	#Vector4,(4*4).w			; illegal
+		move.l	#Vector5,(5*4).w			; div/0
+		move.l	#Vector6,(6*4).w			; chk
+		move.l	#Vector7,(7*4).w			; trapv
+		move.l	#Vector8,(8*4).w			; privilege
 		move.l	#Vector9,(9*4).w			; trace
 		move.l	#Vector10,(10*4).w			; lineA
 		move.l	#Vector11,(11*4).w			; lineF
@@ -533,12 +522,21 @@ SetupExceptionHandlers:
 		rts
 
 ExceptionHandler:
-		add.l	#1,ExceptionCounter
 		move.w	(sp),StatusRegister
-		move.l	2(sp),ProgramCounter
-		and.w	#$2fff,(sp)		; disable trace
-		or.w	#$2000,(sp)		; enable super
+		move.l	2(sp),ProgramCounter		
+
+		btst	#1,VectorState+2
+		beq.b	.notTrace
+
+		btst	#7,(sp)
+		bne.b	.notTrace
+
+		rte
+
+.notTrace	add.l	#1,ExceptionCounter
 		move.l	#Cleanup,2(sp)		; 
+		or.w	#$2000,(sp)		; enable super
+		and.w	#$2fff,(sp)		; disable trace
 		rte
 
 ExceptionCounter	dc.l	0
@@ -547,7 +545,7 @@ CreateVector:	MACRO
 		ori.l	#1<<(\1),VectorState
 		bra.w	ExceptionHandler
 	        ENDM
-
+VectorStart:
 Vector0:	CreateVector	0
 Vector1:	CreateVector	1
 Vector2:	CreateVector	2
@@ -602,8 +600,8 @@ Trap12:		CreateTrap	12
 Trap13:		CreateTrap	13
 Trap14:		CreateTrap	14
 Trap15:		CreateTrap	15
+VectorEnd:
 
+	section opc,bss_f
 
-
-Results		dcb.w	OPCODE_COUNT*2,$00
-		dc.l	$ffffffff
+Results		ds.w	OPCODE_COUNT
