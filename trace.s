@@ -522,8 +522,10 @@ SetupExceptionHandlers:
 		rts
 
 ExceptionHandler:
+	; TODO - detect 000 bus/address exception frame ; NON-STANDARD!
+
 		move.w	(sp),StatusRegister
-		move.l	2(sp),ProgramCounter		
+		move.l	2(sp),ProgramCounter
 
 		btst	#1,VectorState+2
 		beq.b	.notTrace
@@ -534,6 +536,14 @@ ExceptionHandler:
 		rte
 
 .notTrace	add.l	#1,ExceptionCounter
+
+		suba.l	#8,sp			; create new exception frame
+		move.w	8(sp),(sp)		; copy SR
+		move.l	10(sp),2(sp)		; copy PC
+		move.w	#$0000,6(sp)		; indicate 4-word stack frame
+
+;		or.w	#$2000,(sp)		; re-enable SUPER
+;		and.w	#$7fff,(sp)		; disable TRACE
 		move.l	#Cleanup,2(sp)		; 
 		or.w	#$2000,(sp)		; enable super
 		and.w	#$2fff,(sp)		; disable trace
