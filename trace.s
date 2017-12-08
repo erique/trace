@@ -26,10 +26,8 @@ OPCODE_COUNT	= $10000
 REG_An_DELTA	= $100
 REG_An_SANDBOX	= REG_An_DELTA*$10
 
-	section data,data_c
-Padding00	dcb.b	64*1024,$ef
-ReservedMem	dcb.b	REG_An_SANDBOX,$00
-Padding01	dcb.b	64*1024,$fe
+	section data,bss_f
+ReservedMem	ds.b	REG_An_SANDBOX
 
 BASE_ADDRESS	= ReservedMem ;$50000
 
@@ -41,15 +39,15 @@ REG_D4 = $aaaabbcc
 REG_D5 = $ddddeeff
 REG_D6 = $01234567
 REG_D7 = $89abcdef
-REG_A0 = BASE_ADDRESS+REG_An_DELTA*1
-REG_A1 = BASE_ADDRESS+REG_An_DELTA*2
-REG_A2 = BASE_ADDRESS+REG_An_DELTA*3
-REG_A3 = BASE_ADDRESS+REG_An_DELTA*4
-REG_A4 = BASE_ADDRESS+REG_An_DELTA*5
-REG_A5 = BASE_ADDRESS+REG_An_DELTA*6
-REG_A6 = BASE_ADDRESS+REG_An_DELTA*7
-REG_SSP= BASE_ADDRESS+REG_An_DELTA*8
-REG_USP= BASE_ADDRESS+REG_An_DELTA*9
+REG_A0 = BASE_ADDRESS+REG_An_DELTA*3
+REG_A1 = BASE_ADDRESS+REG_An_DELTA*4
+REG_A2 = BASE_ADDRESS+REG_An_DELTA*5
+REG_A3 = BASE_ADDRESS+REG_An_DELTA*6
+REG_A4 = BASE_ADDRESS+REG_An_DELTA*7
+REG_A5 = BASE_ADDRESS+REG_An_DELTA*8
+REG_A6 = BASE_ADDRESS+REG_An_DELTA*9
+REG_SSP= BASE_ADDRESS+REG_An_DELTA*10
+REG_USP= BASE_ADDRESS+REG_An_DELTA*11
 
 
 	section code,code_f
@@ -85,7 +83,7 @@ S
 		move.l	#START_OPCODE,d0	; start opcode
 		move.l	#OPCODE_COUNT-1,d7
 		lea	Compact,a0
-
+		moveq.l	#0,d2
 .tryOp
 		move.w	d0,$dff180		; some visual feedback (COLOR00)
 
@@ -98,8 +96,13 @@ S
 ;		move.w	d0,(a0)+
 ;.notLegal
 
-;		bsr.w	WriteCompactState
-;		adda.w	#16,a0
+		bsr.w	WriteCompactState
+
+		btst	#4,1(a0)
+		bne.b	.notLegal
+		addq.l	#1,d2
+.notLegal
+		adda.w	#16,a0
 
 		addq.l	#1,d0
 		dbf	d7,.tryOp
@@ -107,6 +110,7 @@ S
 ;		suba.l	#Compact,a0
 ;		move.l	a0,d0
 ;		lsr.l	#1,d0
+		move.l	d2,d0
 
 		lea	Compact+12,a0
 		move.l	#OPCODE_COUNT-1,d7
@@ -150,9 +154,9 @@ Execute:
 		movem.l	d0-a6,-(sp)
 		move.l	a7,SuperStack
 
-		eor.w	#$1000,sr		; enable ISP
-		move.l	a7,InterruptStack
-		eor.w	#$1000,sr		; disable ISP
+;		eor.w	#$1000,sr		; enable ISP
+;		move.l	a7,InterruptStack
+;		eor.w	#$1000,sr		; disable ISP
 
 		move.l	USP,a0
 		move.l	a0,UserStack
@@ -201,23 +205,26 @@ Cleanup:
 		move.l	USP,a0
 		move.l	a0,RegState_USP
 
+		bsr.w	RestoreVectors
+
 		move.l	ProgramCounter(pc),d0
 		sub.l	#Execute\.p,d0
-		cmp.l	#32,d0			; let's assume no instruction is longer than 32bytes ;)
-		blo.b	.sizeOk
-		move.w	#$ffff,d0
-.sizeOk		move.w	d0,InstructionSize
+;		cmp.l	#32,d0			; let's assume no instruction is longer than 32bytes ;)
+;		blo.b	.sizeOk
+;		move.w	#$ffff,d0
+;.sizeOk
+		move.w	d0,InstructionSize
 
 		move.l	UserStack(pc),a0
 		move.l	a0,USP
 
-		eor.w	#$1000,sr		; enable ISP
-		move.l	InterruptStack(pc),a7
-		eor.w	#$1000,sr		; disable ISP
+;		eor.w	#$1000,sr		; enable ISP
+;		move.l	InterruptStack(pc),a7
+;		eor.w	#$1000,sr		; disable ISP
 
 		move.l	SuperStack(pc),a7
 
-		bsr.w	RestoreVectors
+;		bsr.w	RestoreVectors
 
 		movem.l	(sp)+,d0-a6
 		rte
@@ -434,27 +441,41 @@ SystemVectors:	ds.l	32+16
 
 SetupExceptionHandlers:
 
-
-		move.l	#$EDB88320,d0
-		lea	$0.w,a0
-		move.l	d0,(a0)+		; Reset SP
-		move.l	d0,(a0)+		; Reset PC
+		lea	$8.w,a0
 		moveq.l	#10-1,d7
 		lea	Vector2(pc),a1
-.initVectors:	move.l	a1,(a0)+		; Vector2 - Vector11
-		adda.w	#Vector3-Vector2,a1
+.initVectors:	move.l	a1,(a0)+
+		adda.w	#Vector3-Vector2,a1		
 		dbf	d7,.initVectors
- 
-		moveq.l	#20-1,d7
-.initDummies	move.l	d0,(a0)+		; Vector20 - Vector31
-		dbf	d7,.initDummies
 
+		lea	$80.w,a0
 		moveq.l	#16-1,d7
 		lea	Trap0(pc),a1
-.initTraps:	move.l	a1,(a0)+		; Vector32 - Vector47
-		adda.w	#Trap1-Trap0,a1
+.initTraps:	move.l	a1,(a0)+
+		adda.w	#Trap1-Trap0,a1		
 		dbf	d7,.initTraps
 
+;
+;		move.l	#$EDB88320,d0
+;		lea	$0.w,a0
+;		move.l	d0,(a0)+		; Reset SP
+;		move.l	d0,(a0)+		; Reset PC
+;		moveq.l	#10-1,d7
+;		lea	Vector2(pc),a1
+;.initVectors:	move.l	a1,(a0)+		; Vector2 - Vector11
+;		adda.w	#Vector3-Vector2,a1
+;		dbf	d7,.initVectors
+; 
+;		moveq.l	#20-1,d7
+;.initDummies	move.l	d0,(a0)+		; Vector20 - Vector31
+;		dbf	d7,.initDummies
+;
+;		moveq.l	#16-1,d7
+;		lea	Trap0(pc),a1
+;.initTraps:	move.l	a1,(a0)+		; Vector32 - Vector47
+;		adda.w	#Trap1-Trap0,a1
+;		dbf	d7,.initTraps
+;
 		rts
 
 ExceptionHandler:
