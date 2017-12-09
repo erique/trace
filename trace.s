@@ -21,7 +21,7 @@
 		jmp	S
 
 START_OPCODE	= $0000
-OPCODE_COUNT	= $10000
+OPCODE_COUNT	= $100
 
 REG_An_DELTA	= $100
 REG_An_SANDBOX	= REG_An_DELTA*$10
@@ -90,11 +90,6 @@ S
 		moveq.l	#$0000,d1		; USER mode, CCR = $0
 		bsr.b	Execute			; Execute opcode d0.w in SR mode d1.w
 
-;		move.w	VectorState(pc),d1
-;		and.w	#1<<4,d1
-;		bne.b	.notLegal
-;		move.w	d0,(a0)+
-;.notLegal
 
 		bsr.w	WriteCompactState
 
@@ -107,9 +102,6 @@ S
 		addq.l	#1,d0
 		dbf	d7,.tryOp
 
-;		suba.l	#Compact,a0
-;		move.l	a0,d0
-;		lsr.l	#1,d0
 		move.l	d2,d0
 
 		lea	Compact+12,a0
@@ -176,8 +168,18 @@ Execute:
 		bsr.w	ClearState
 		bsr.w	SetupRegisters
 
+		; record CRC32
+		move.l	a7,.saveStack
+		lea	.tempStack+32*4,a7
+		bsr	RecordMemoryCRC32
+		move.l	.saveStack,a7
+		; CRC32 done
+
 .smc:		move.w	#$ffff,sr		; dummy write - smc
 .p:		dc.l	0,0,0,0,0
+
+.saveStack	dc.l	0
+.tempStack	ds.l	32
 
 Cleanup:	
 		; compare Dn + An + USP
@@ -204,6 +206,11 @@ Cleanup:
 		add.l	#12,RegState_SSP	; normal RTE frame
 		move.l	USP,a0
 		move.l	a0,RegState_USP
+
+		move.l	MemoryCRC32,d0
+		bsr.b	RecordMemoryCRC32
+		move.l	MemoryCRC32,MemoryState
+		move.l	d0,MemoryCRC32
 
 		bsr.w	RestoreVectors
 
@@ -239,6 +246,57 @@ ClearState	lea	State(pc),a0
 		dbf	d7,.clear
 		rts
 
+RecordMemoryCRC32
+		movem.l	d0-a6,-(a7)
+
+		moveq.l	#-1,d0
+		bsr	FeedCyclicSum ;FeedCRC32
+
+;		lea	0.w,a0
+;		move.l	#48*4,d0
+;		bsr	FeedCyclicSum ;FeedCRC32
+
+		lea	BASE_ADDRESS,a0
+		move.l	#REG_An_SANDBOX,d0
+		bsr	FeedCyclicSum ;FeedCRC32
+
+		move.l	d0,MemoryCRC32
+
+		movem.l	(a7)+,d0-a6
+		rts
+
+MemoryCRC32	dc.l	0
+
+
+FeedCyclicSum:	cmp.l	#-1,d0
+		bne.b	.start
+
+		move.l	d0,.crc
+		bra.w	.out
+
+.start		movem.l	d1-d5/a0,-(sp)
+
+		lsr.l	#2,d0
+		move.l	.crc(pc),d1
+		move.l	#$edb88320,d2
+		bra.b	.go
+.calc:
+		add.l	(a0)+,d1
+		eor.l	d2,d1
+		swap	d1
+
+.go		subq.l	#1,d0
+		bpl.b	.calc
+
+		move.l	d1,.crc
+		move.l	d1,d0
+
+		movem.l	(sp)+,d1-d5/a0
+
+.out:		not.l	d0
+		rts
+
+.crc	dc.l	0
 
 FeedCRC32:	cmp.l	#-1,d0
 		bne.b	.start
@@ -329,7 +387,7 @@ CompareReg	MACRO
 
 		move.l	d0,8(a0)
 
-		move.l	#$01234567,12(a0)
+		move.l	MemoryState(pc),12(a0)
 
 		movem.l	(sp)+,d0-d1
 		rts
@@ -341,7 +399,7 @@ TrapState:	dc.w	0
 StatusRegister	dc.w	0
 InstructionSize:dc.w	0
 ProgramCounter:	dc.l	0
-		dc.l	0	; pad
+MemoryState	dc.l	0
 RegState_D0	dc.l	0
 RegState_D1	dc.l	0
 RegState_D2	dc.l	0
@@ -441,42 +499,44 @@ SystemVectors:	ds.l	32+16
 
 SetupExceptionHandlers:
 
-		lea	$8.w,a0
-		moveq.l	#10-1,d7
-		lea	Vector2(pc),a1
-.initVectors:	move.l	a1,(a0)+
-		adda.w	#Vector3-Vector2,a1		
-		dbf	d7,.initVectors
-
-		lea	$80.w,a0
-		moveq.l	#16-1,d7
-		lea	Trap0(pc),a1
-.initTraps:	move.l	a1,(a0)+
-		adda.w	#Trap1-Trap0,a1		
-		dbf	d7,.initTraps
-
-;
-;		move.l	#$EDB88320,d0
-;		lea	$0.w,a0
-;		move.l	d0,(a0)+		; Reset SP
-;		move.l	d0,(a0)+		; Reset PC
+;		lea	$8.w,a0
 ;		moveq.l	#10-1,d7
 ;		lea	Vector2(pc),a1
-;.initVectors:	move.l	a1,(a0)+		; Vector2 - Vector11
-;		adda.w	#Vector3-Vector2,a1
+;.initVectors:	move.l	a1,(a0)+
+;		adda.w	#Vector3-Vector2,a1		
 ;		dbf	d7,.initVectors
-; 
-;		moveq.l	#20-1,d7
-;.initDummies	move.l	d0,(a0)+		; Vector20 - Vector31
-;		dbf	d7,.initDummies
 ;
+;		lea	$80.w,a0
 ;		moveq.l	#16-1,d7
 ;		lea	Trap0(pc),a1
-;.initTraps:	move.l	a1,(a0)+		; Vector32 - Vector47
-;		adda.w	#Trap1-Trap0,a1
+;.initTraps:	move.l	a1,(a0)+
+;		adda.w	#Trap1-Trap0,a1		
 ;		dbf	d7,.initTraps
-;
+
+
+		move.l	#EmptyHandler,d0
+		lea	$0.w,a0
+		move.l	d0,(a0)+		; Reset SP
+		move.l	d0,(a0)+		; Reset PC
+		moveq.l	#10-1,d7
+		lea	Vector2(pc),a1
+.initVectors:	move.l	a1,(a0)+		; Vector2 - Vector11
+		adda.w	#Vector3-Vector2,a1
+		dbf	d7,.initVectors
+ 
+		moveq.l	#20-1,d7
+.initDummies	move.l	d0,(a0)+		; Vector20 - Vector31
+		dbf	d7,.initDummies
+
+		moveq.l	#16-1,d7
+		lea	Trap0(pc),a1
+.initTraps:	move.l	a1,(a0)+		; Vector32 - Vector47
+		adda.w	#Trap1-Trap0,a1
+		dbf	d7,.initTraps
+
 		rts
+
+EmptyHandler	rte		
 
 ExceptionHandler:
 	; TODO - detect 000 bus/address exception frame ; NON-STANDARD!
