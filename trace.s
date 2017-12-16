@@ -1,20 +1,60 @@
 
-; Preamble - System specific startup
-
-		lea	Compact,a0
-;		bsr.b	AmigaPreamble
-;		bsr.b	AmigaSave
-;		rts
+; Fixed:
+;	BASE_ADDRESS - 96k
+;
+; Sandbox = 128k = $20000 bytes :
+; 	BASE_ADDRESS - 64k
+; 	BASE_ADDRESS = $30000 
+; 	BASE_ADDRESS + 64k
 
 ;; ----------------------------------------------------------------------------
 
+STANDALONE	= 1
+RECORD		= 1
+START_OPCODE	= $0000
+OPCODE_COUNT	= $100
+
+;; ----------------------------------------------------------------------------
+
+
+; Preamble - System specific startup
+
+	IFEQ	STANDALONE
+		lea	Opcode,a0
+	ENDC
+	IFEQ	RECORD
+		lea	Opcode,a0
+	ENDC
+
+	IFNE	STANDALONE
+		bsr.b	AmigaPreamble
+		bsr.w	AmigaSave
+		rts
+	ENDC
+;; ----------------------------------------------------------------------------
+
 AmigaPreamble	pea	.cleanup(pc)
-		pea	S
+		pea	.run(pc)
 		lea	.zerovbr(pc),a5
 .super		move.l	$4.w,a6
 		jmp	-30(a6)			; Supervisor()
 	; Disable()/Forbid() and copy VBR to $0
 .zerovbr
+		move.l	a0,-(sp)
+		move.l	#ALLOCABS_SIZE,d0
+		move.l	#BASE_ADDRESS-$10000,a1
+		jsr	-204(a6)		; AllocAbs
+		lea	.mem(pc),a0
+		move.l	d0,(a0)
+	IFNE	STANDALONE
+		move.l	#OPCODE_COUNT*16,d0
+		moveq.l	#0,d1			; MEMF_ANY
+		jsr	-198(a6)		; AllocMem
+		lea	.mem2(pc),a0
+		move.l	d0,(a0)
+		move.l	d0,(sp)
+	ENDC
+		move.l	(sp)+,a0
 		jsr	-120(a6)		; Disable()
 		btst.b	#0,$129(a6)		; AttnFlags
 		beq.b	.novbr
@@ -36,75 +76,98 @@ AmigaPreamble	pea	.cleanup(pc)
 		movec	d0,cacr			; all caches off
 		movec	d0,vbr
 .novbr		rte
+.run
+		moveq.l	#-1,d0
+		tst.l	.mem(pc)
+		beq.b	.nomem
+		addq.l	#1,d0
+		tst.l	a0
+		beq.b	.nomem
+		jmp	S
+.nomem		move.l	d0,d1
+		rts
 	; tail cleanup
 .cleanup:	lea	.restorevbr(pc),a5
-		bra.b	.super
+		bra.w	.super
 	; set VBR back to whatever it was, and Enable()/Permit()
-.restorevbr	move.l	d0,-(sp)
+.restorevbr	movem.l	d0-d1,-(sp)
 		move.l	.oldvbr(pc),d0
 		beq.b	.alreadyzero
 		movec	d0,vbr
 .alreadyzero	jsr	-126(a6)		; Enable()
-		move.l	(sp)+,d0
+		move.l	.mem(pc),d0
+		beq.b	.skip
+		move.l	d0,a1
+		move.l	#ALLOCABS_SIZE,d0
+		jsr	-210(a6)		; FreeMem()
+	IFNE	STANDALONE
+		move.l	.mem2(pc),d0
+		beq.b	.skip
+		move.l	d0,a1
+		move.l	#OPCODE_COUNT*16,d0
+		jsr	-210(a6)		; FreeMem()
+	ENDC		
+.skip		movem.l	(sp)+,d0-d1
 		rte
 .oldvbr		dc.l	0
 .oldcacr	dc.w	0,0
+.mem		dc.l	0
+.mem2		dc.l	0
 
-;AmigaSave	movem.l	d0-a6,-(sp)
-;
-;		move.l	a0,a5
-;		move.l	d0,d5
-;
-;		move.l	$4.w,a6
-;		lea	.dos(pc),a1
-;		jsr	-408(a6)		; OldOpenLibrary()
-;		tst.l	d0
-;		beq	.failLib
-;		move.l	d0,a6
-;
-;		lea	.file(pc),a1
-;		move.l	a1,d1
-;		move.l	#1006,d2		; MODE_NEWFILE
-;		jsr	-30(a6)			; Open()
-;		move.l	d0,d4
-;		beq.b	.failOpen
-;		
-;		move.l	d4,d1
-;		move.l	a5,d2
-;		move.l	d5,d3
-;		lsl.l	#4,d3
-;		jsr	-48(a6)			; Write()
-;		move.l	d4,d1
-;		jsr	-360(a6)		; Flush()
-;		move.l	d4,d1
-;		jsr	-36(a6)			; Close()
-;
-;		bra.b	.done
-;
-;.failOpen	jsr	-132(a6)
-;
-;.done		move.l	a6,a1		
-;		move.l	$4.w,a6
-;		jsr	-414(a6)		; CloseLibrary()
-;
-;.failLib	movem.l	(sp)+,d0-a6
-;		rts
-;
-;.dos		dc.b	"dos.library",0
-;.file		dc.b	"RAM:opcode.bin",0
+AmigaSave	movem.l	d0-a6,-(sp)
 
+		move.l	a0,a5
+		move.l	d0,d5
+
+		move.l	$4.w,a6
+		lea	.dos(pc),a1
+		jsr	-408(a6)		; OldOpenLibrary()
+		tst.l	d0
+		beq	.failLib
+		move.l	d0,a6
+
+		lea	.file(pc),a1
+		move.l	a1,d1
+		move.l	#1006,d2		; MODE_NEWFILE
+		jsr	-30(a6)			; Open()
+		move.l	d0,d4
+		beq.b	.failOpen
+		
+		move.l	d4,d1
+		move.l	a5,d2
+		move.l	d5,d3
+		lsl.l	#4,d3
+		jsr	-48(a6)			; Write()
+		move.l	d4,d1
+		jsr	-360(a6)		; Flush()
+		move.l	d4,d1
+		jsr	-36(a6)			; Close()
+
+		bra.b	.done
+
+.failOpen	jsr	-132(a6)
+
+.done		move.l	a6,a1		
+		move.l	$4.w,a6
+		jsr	-414(a6)		; CloseLibrary()
+
+.failLib	movem.l	(sp)+,d0-a6
+		rts
+
+.dos		dc.b	"dos.library",0
+.file		dc.b	"RAM:opcode.bin",0
+		even
 
 ;; ----------------------------------------------------------------------------
-
-RECORD		= 1
-START_OPCODE	= $0000
-OPCODE_COUNT	= $10000
 
 REG_An_DELTA	= $100
 REG_An_SANDBOX	= REG_An_DELTA*$10
 REG_An_START	= 1	; start offset in the sandbox
 
-BASE_ADDRESS	= $50000
+BASE_ADDRESS	= $30000
+ALLOCABS_SIZE	= 2*$10000+$10000  ; 64k +/- BASE_ADDRESS + CODE = 64kB
+
+CODE_START	= BASE_ADDRESS+$10000+$8000
 
 REG_D0 = $00000000
 REG_D1 = $11112233
@@ -124,13 +187,12 @@ REG_A6 = BASE_ADDRESS+REG_An_DELTA*(REG_An_START+6)
 REG_USP= BASE_ADDRESS+REG_An_DELTA*(REG_An_START+7)
 REG_SSP= BASE_ADDRESS+REG_An_DELTA*(REG_An_START+8+1)	; SSP separation
 
+ILLEGAL_OP	= $4AFC
+BRA_LOOP	= $60FC
+JMP_LONG	= $4EF9
+MOVE_SR		= $46FC
 
-;; ----------------------------------------------------------------------------
-
-		org	$30000
-
-ERROR		illegal			; will jump here if the check fails
-		bra.b	ERROR
+		cnop	0,4
 
 ;; ----------------------------------------------------------------------------
 
@@ -198,13 +260,13 @@ S		movem.l	d2-a6,-(sp)
 		addq.l	#1,d2
 .notLegal
 		cmpm.l	(a0)+,(a1)+
-		bne.w	ERROR
+		bne.w	.error
 		cmpm.l	(a0)+,(a1)+
-		bne.w	ERROR
+		bne.w	.error
 		cmpm.l	(a0)+,(a1)+
-		bne.w	ERROR
+		bne.w	.error
 		cmpm.l	(a0)+,(a1)+
-		bne.w	ERROR
+		bne.w	.error
 		
 		addq.l	#1,d0
 		tst.w	d0
@@ -214,11 +276,15 @@ S		movem.l	d2-a6,-(sp)
 	; ^^^
 
 		move.l	#OPCODE_COUNT,d0
-		movem.l	(sp)+,d2-a6
+.escape		movem.l	(sp)+,d2-a6
 		rts
 
 .single		ds.l	4
 		dc.l	0,0,0,0
+
+.error	;	move.l	#-1,d1
+	;	bra.b	.escape
+		jmp	ERROR
 
 ;; ----------------------------------------------------------------------------
 
@@ -241,7 +307,13 @@ Execute:
 
 .execute	move.w	#$2700,sr
 
+		move.w	#MOVE_SR,InitSR
 		move.w	d0,P
+		move.w	#JMP_LONG,Done
+		move.l	#Cleanup,Done+2
+
+		move.w	#ILLEGAL_OP,ERROR
+		move.l	#BRA_LOOP,ERROR+2
 
 		movem.l	d0-a6,-(sp)
 
@@ -273,7 +345,7 @@ Execute:
 		bsr	CalcMemoryChecksum
 		move.l	SuperStack(pc),a7
 
-		bra.w	InitSR
+		jmp	InitSR
 
 Cleanup:	move.l	d0,RegState_D0
 		move.l	d1,RegState_D1
@@ -570,16 +642,15 @@ SetupExceptionHandlers:
 	; Wrap all (48) vectors so we have defined/known memory contents at address $0
 
 		lea	$0.w,a0
-		lea	WrapHandlers(pc),a1
-
-WrapVector	MACRO
+		lea	WrapHandlers,a1
+		moveq.l	#48-1,d7
+.initWraps
+		; Vector0 - Vector47
+		move.w	#JMP_LONG,(a1)
 		move.l	(a0),2(a1)
 		move.l	a1,(a0)+
 		addq.l	#6,a1
-		ENDM
 
-		moveq.l	#48-1,d7
-.initWraps	WrapVector			; Vector0 - Vector47
 		dbf	d7,.initWraps
 
 		rts
@@ -637,7 +708,7 @@ ExceptionHandler:
 
 .busError68k	or.w	#$2000,(sp)		; re-enable SUPER
 		and.w	#$2fff,(sp)		; disable TRACE
-		move.l	#Cleanup,2(sp)		; .. and bounce back
+		move.l	#Done,2(sp)		; .. and bounce back
 		rte
 
 .busOrAddrErr	btst	#6,(sp)			; T0 - not used
@@ -698,11 +769,6 @@ SuperStack	dc.l	0
 SystemStack	dc.l	0
 SystemVectors:	ds.l	32+16
 
-		cnop	0,256
-WrapHandlers
-	rept	48
-		jmp	$0.l
-	endr
 
 ;; ----------------------------------------------------------------------------
 
@@ -737,26 +803,39 @@ StateEnd:
 E:
 
 ;; ----------------------------------------------------------------------------
-
 	; ORG this separately so that code changes don't ripple through
-		org	$31000
+;; ----------------------------------------------------------------------------
+		org	CODE_START
 
-InitSR:		move.w	#$ffff,sr		; dummy write - smc
+ERROR		dc.w	0	; illegal			; will jump here if the check fails
+		dc.w	0	; bra.b	ERROR
+
+		org	CODE_START+$100
+WrapHandlers
+	rept	48
+		dc.w	0,0,0	;jmp	$0.l
+	endr
+
+		org	CODE_START+$1000
+InitSR:		dc.w	0,0	;move.w	#$ffff,sr		; dummy write - smc
 P:		dc.l	0,0,0,0,0,0
 
+		org	CODE_START+$1100
+Done:		dc.w	0,0,0	;jmp	$0.l
 
 ;; ----------------------------------------------------------------------------
 
 
-	IFNE	RECORD
+	IFEQ	STANDALONE
 	section opc,bss_f
-
-Compact		ds.b	OPCODE_COUNT*16	; 4 longs per op, in compact mode
+Opcode		ds.b	OPCODE_COUNT*16	; 4 longs per op, in compact mode
 
 	ELSE
 	
+	IFEQ	RECORD
 	section opc,data_f
+Opcode		incbin	"sys:opcode.020nofpu.bin"
 
-Compact		incbin	"sys:opcode.020nofpu.bin"
+	ENDC
 
 	ENDC
