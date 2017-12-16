@@ -1,35 +1,110 @@
-; 8MB / 64K ops => 128bytes
-; 8+8 32bit => 64 bytes
-; USP => 4 bytes
-; Vector + Trap => 4 bytes
-; SR => 2 bytes
-; PC 2/4/6/8/-1 => 2 bytes capped
-; CRC32 mem => 4bytes
-; ==> 80 bytes
+
+; Preamble - System specific startup
+
+		lea	Compact,a0
+;		bsr.b	AmigaPreamble
+;		bsr.b	AmigaSave
+;		rts
+
+;; ----------------------------------------------------------------------------
+
+AmigaPreamble	pea	.cleanup(pc)
+		pea	S
+		lea	.zerovbr(pc),a5
+.super		move.l	$4.w,a6
+		jmp	-30(a6)			; Supervisor()
+	; Disable()/Forbid() and copy VBR to $0
+.zerovbr
+		jsr	-120(a6)		; Disable()
+		btst.b	#0,$129(a6)		; AttnFlags
+		beq.b	.novbr
+		movec	vbr,d0
+		lea	.oldvbr(pc),a5
+		move.l	d0,(a5)
+		beq	.done
+		movea.l	d0,a5
+		lea	$0.w,a6
+		moveq.l	#256/2-1,d7
+.copyvbr	move.l	(a5)+,(a6)+
+		move.l	(a5)+,(a6)+
+		dbf	d7,.copyvbr
+.done
+		movec	cacr,d0			; we assume either 000 or 020+ (not 010)
+		lea	.oldcacr(pc),a5
+		move.w	d0,(a5)
+		moveq.l	#0,d0
+		movec	d0,cacr			; all caches off
+		movec	d0,vbr
+.novbr		rte
+	; tail cleanup
+.cleanup:	lea	.restorevbr(pc),a5
+		bra.b	.super
+	; set VBR back to whatever it was, and Enable()/Permit()
+.restorevbr	move.l	d0,-(sp)
+		move.l	.oldvbr(pc),d0
+		beq.b	.alreadyzero
+		movec	d0,vbr
+.alreadyzero	jsr	-126(a6)		; Enable()
+		move.l	(sp)+,d0
+		rte
+.oldvbr		dc.l	0
+.oldcacr	dc.w	0,0
+
+;AmigaSave	movem.l	d0-a6,-(sp)
+;
+;		move.l	a0,a5
+;		move.l	d0,d5
+;
+;		move.l	$4.w,a6
+;		lea	.dos(pc),a1
+;		jsr	-408(a6)		; OldOpenLibrary()
+;		tst.l	d0
+;		beq	.failLib
+;		move.l	d0,a6
+;
+;		lea	.file(pc),a1
+;		move.l	a1,d1
+;		move.l	#1006,d2		; MODE_NEWFILE
+;		jsr	-30(a6)			; Open()
+;		move.l	d0,d4
+;		beq.b	.failOpen
+;		
+;		move.l	d4,d1
+;		move.l	a5,d2
+;		move.l	d5,d3
+;		lsl.l	#4,d3
+;		jsr	-48(a6)			; Write()
+;		move.l	d4,d1
+;		jsr	-360(a6)		; Flush()
+;		move.l	d4,d1
+;		jsr	-36(a6)			; Close()
+;
+;		bra.b	.done
+;
+;.failOpen	jsr	-132(a6)
+;
+;.done		move.l	a6,a1		
+;		move.l	$4.w,a6
+;		jsr	-414(a6)		; CloseLibrary()
+;
+;.failLib	movem.l	(sp)+,d0-a6
+;		rts
+;
+;.dos		dc.b	"dos.library",0
+;.file		dc.b	"RAM:opcode.bin",0
 
 
+;; ----------------------------------------------------------------------------
 
-; extended mode = 80 bytes
-
-		; compare Dn + An + USP
-		; Dx.l + Ax.l + USP.l
-		; SR.w + EX.w + PC.w
-		; CRC32 
-
-
-
-		jmp	S
-
+RECORD		= 1
 START_OPCODE	= $0000
-OPCODE_COUNT	= $100
+OPCODE_COUNT	= $10000
 
 REG_An_DELTA	= $100
 REG_An_SANDBOX	= REG_An_DELTA*$10
+REG_An_START	= 1	; start offset in the sandbox
 
-	section data,bss_f
-ReservedMem	ds.b	REG_An_SANDBOX
-
-BASE_ADDRESS	= ReservedMem ;$50000
+BASE_ADDRESS	= $50000
 
 REG_D0 = $00000000
 REG_D1 = $11112233
@@ -39,96 +114,121 @@ REG_D4 = $aaaabbcc
 REG_D5 = $ddddeeff
 REG_D6 = $01234567
 REG_D7 = $89abcdef
-REG_A0 = BASE_ADDRESS+REG_An_DELTA*3
-REG_A1 = BASE_ADDRESS+REG_An_DELTA*4
-REG_A2 = BASE_ADDRESS+REG_An_DELTA*5
-REG_A3 = BASE_ADDRESS+REG_An_DELTA*6
-REG_A4 = BASE_ADDRESS+REG_An_DELTA*7
-REG_A5 = BASE_ADDRESS+REG_An_DELTA*8
-REG_A6 = BASE_ADDRESS+REG_An_DELTA*9
-REG_SSP= BASE_ADDRESS+REG_An_DELTA*10
-REG_USP= BASE_ADDRESS+REG_An_DELTA*11
+REG_A0 = BASE_ADDRESS+REG_An_DELTA*(REG_An_START+0)
+REG_A1 = BASE_ADDRESS+REG_An_DELTA*(REG_An_START+1)
+REG_A2 = BASE_ADDRESS+REG_An_DELTA*(REG_An_START+2)
+REG_A3 = BASE_ADDRESS+REG_An_DELTA*(REG_An_START+3)
+REG_A4 = BASE_ADDRESS+REG_An_DELTA*(REG_An_START+4)
+REG_A5 = BASE_ADDRESS+REG_An_DELTA*(REG_An_START+5)
+REG_A6 = BASE_ADDRESS+REG_An_DELTA*(REG_An_START+6)
+REG_USP= BASE_ADDRESS+REG_An_DELTA*(REG_An_START+7)
+REG_SSP= BASE_ADDRESS+REG_An_DELTA*(REG_An_START+8+1)	; SSP separation
 
 
-	section code,code_f
+;; ----------------------------------------------------------------------------
 
-ZeroVBRAmiga	pea	.cleanup(pc)
-		pea	S(pc)
-		lea	.zerovbr(pc),a5
-.super		move.l	$4.w,a6
-		jmp	-30(a6)			; Supervisor()
-.zerovbr	movec	vbr,d0
-		lea	.oldvbr(pc),a0
-		move.l	d0,(a0)
-		beq	.done
-		movea.l	d0,a0
-		lea	$0.w,a1
-		moveq.l	#256/2-1,d7
-.copyvbr	move.l	(a0)+,(a1)+
-		move.l	(a0)+,(a1)+
-		dbf	d7,.copyvbr
-.done		moveq.l	#0,d0
-		movec	d0,vbr
-		rte
-.cleanup:	lea	.restorevbr(pc),a5
-		bra.b	.super
-.restorevbr	move.l	.oldvbr(pc),d0
-		movec	d0,vbr
-		rte
-.oldvbr		dc.l	0
+		org	$30000
 
+ERROR		illegal			; will jump here if the check fails
+		bra.b	ERROR
 
-S
-		movem.l	d1-a6,-(sp)
+;; ----------------------------------------------------------------------------
+
+S		movem.l	d2-a6,-(sp)
+
+	; Clear memory around the 'sandbox' ; BASE_ADDRESS +/- 64K
+
+		move.l	#BASE_ADDRESS-64*1024,a1
+		moveq.l	#0,d0
+		move.w	#2*64*1024/32-1,d7
+.clear
+	rept	8
+		move.l	d0,(a1)+
+	endr
+		dbf	d7,.clear
+
+		move.l	a0,a1
+
+		moveq.l	#RECORD,d0
+		beq.b	.skipRecord
+
+	; Record mode 		
 		move.l	#START_OPCODE,d0	; start opcode
-		move.l	#OPCODE_COUNT-1,d7
-		lea	Compact,a0
-		moveq.l	#0,d2
+		move.w	#OPCODE_COUNT-1,d7
 .tryOp
-		move.w	d0,$dff180		; some visual feedback (COLOR00)
+		move.w	d0,$dff180		; some visual feedback (COLOR00 - background)
+
+		moveq.l	#$0000,d1		; USER mode, CCR = $0
+		bsr.w	Execute			; Execute opcode d0.w in SR mode d1.w
+
+		bsr.w	WriteCompactState
+		adda.w	#16,a0
+
+		addq.l	#1,d0
+		tst.w	d0
+		dbeq	d7,.tryOp
+	; ^^^
+
+.skipRecord
+
+	; Validate mode
+		move.l	#START_OPCODE,d0	; start opcode
+		move.w	#OPCODE_COUNT-1,d7
+		moveq.l	#0,d2
+
+.validateOp	cmp.w	(a1),d0			; find the matching opcode in the table
+		blo.b	.nextop
+		beq.b	.ok
+
+		adda.w	#16,a1
+		bra.b	.validateOp
+.nextop		addq.l	#1,d0
+		bra.b	.validateOp
+
+.ok		move.w	d0,$dff182		; some visual feedback (COLOR01 - text)
 
 		moveq.l	#$0000,d1		; USER mode, CCR = $0
 		bsr.b	Execute			; Execute opcode d0.w in SR mode d1.w
 
-
+		lea	.single(pc),a0
 		bsr.w	WriteCompactState
 
-		btst	#4,1(a0)
+		btst	#4,5(a0)		; Vector state = offset 4 (word)
 		bne.b	.notLegal
 		addq.l	#1,d2
 .notLegal
-		adda.w	#16,a0
-
+		cmpm.l	(a0)+,(a1)+
+		bne.w	ERROR
+		cmpm.l	(a0)+,(a1)+
+		bne.w	ERROR
+		cmpm.l	(a0)+,(a1)+
+		bne.w	ERROR
+		cmpm.l	(a0)+,(a1)+
+		bne.w	ERROR
+		
 		addq.l	#1,d0
-		dbf	d7,.tryOp
+		tst.w	d0
+		dbeq	d7,.validateOp
 
-		move.l	d2,d0
+		move.l	d2,d1			; number of valid opcodes
+	; ^^^
 
-		lea	Compact+12,a0
-		move.l	#OPCODE_COUNT-1,d7
-.check		cmp.l	#$01234567,(a0)
-		beq.b	.ok
-;		illegal
-		nop
-.ok		adda.w	#16,a0
-		dbf	d7,.check
-
-		movem.l	(sp)+,d1-a6
+		move.l	#OPCODE_COUNT,d0
+		movem.l	(sp)+,d2-a6
 		rts
 
-
+.single		ds.l	4
+		dc.l	0,0,0,0
 
 ;; ----------------------------------------------------------------------------
 
 ; d0.w = opcode
 ; d1.w = SR
-
 Execute:
 		move.l	#.execute,$80.w		; Execute one instruction
 		trap	#0			; switch to SUPER
 
-		move.w	VectorState(pc),d1
-		and.w	#1<<8,d1		; check for PRIV violation
+		btst	#0,VectorState		; check for PRIV violation
 		beq.b	.done
 
 		cmp.w	#$4e70,d0		; $4e70 = RESET
@@ -141,26 +241,25 @@ Execute:
 
 .execute	move.w	#$2700,sr
 
-		move.w	d0,.p
+		move.w	d0,P
 
 		movem.l	d0-a6,-(sp)
-		move.l	a7,SuperStack
 
-;		eor.w	#$1000,sr		; enable ISP
-;		move.l	a7,InterruptStack
-;		eor.w	#$1000,sr		; disable ISP
+		eor.w	#$1000,sr		; enable ISP
+		move.l	a7,a0
+		eor.w	#$1000,sr		; disable ISP
+		move.l	a0,-(sp)
 
 		move.l	USP,a0
-		move.l	a0,UserStack
+		move.l	a0,-(sp)
 
-		moveq.l	#0,d0
-		movec	d0,cacr			; all caches off
+		move.l	a7,SystemStack
 
 		move.w	#0,ccr			; clear CCR
 		move.w	sr,d2			; get full SR
 		eor.w	#$a000,d1		; enable trace + switch to usermode
 		eor.w	d2,d1			; keep original SR bits
-		move.w	d1,.smc+2		; patch opcode
+		move.w	d1,InitSR+2		; patch opcode
 
 		bsr.w	SaveVectors
 		bsr.w	SetupExceptionHandlers
@@ -168,26 +267,15 @@ Execute:
 		bsr.w	ClearState
 		bsr.w	SetupRegisters
 
-		; record CRC32
-		move.l	a7,.saveStack
-		lea	.tempStack+32*4,a7
-		bsr	RecordMemoryCRC32
-		move.l	.saveStack,a7
-		; CRC32 done
+	; Record the memory state
+		move.l	a7,SuperStack
+		move.l	SystemStack(pc),a7
+		bsr	CalcMemoryChecksum
+		move.l	SuperStack(pc),a7
 
-.smc:		move.w	#$ffff,sr		; dummy write - smc
-.p:		dc.l	0,0,0,0,0
+		bra.w	InitSR
 
-.saveStack	dc.l	0
-.tempStack	ds.l	32
-
-Cleanup:	
-		; compare Dn + An + USP
-		; Dx.l + Ax.l + USP.l
-		; SR.w + EX.w + PC.w
-		; CRC32 
-
-		move.l	d0,RegState_D0
+Cleanup:	move.l	d0,RegState_D0
 		move.l	d1,RegState_D1
 		move.l	d2,RegState_D2
 		move.l	d3,RegState_D3
@@ -203,42 +291,33 @@ Cleanup:
 		move.l	a5,RegState_A5
 		move.l	a6,RegState_A6
 		move.l	a7,RegState_SSP
-		add.l	#12,RegState_SSP	; normal RTE frame
 		move.l	USP,a0
 		move.l	a0,RegState_USP
 
-		move.l	MemoryCRC32,d0
-		bsr.b	RecordMemoryCRC32
-		move.l	MemoryCRC32,MemoryState
-		move.l	d0,MemoryCRC32
-
-		bsr.w	RestoreVectors
-
 		move.l	ProgramCounter(pc),d0
-		sub.l	#Execute\.p,d0
-;		cmp.l	#32,d0			; let's assume no instruction is longer than 32bytes ;)
-;		blo.b	.sizeOk
-;		move.w	#$ffff,d0
-;.sizeOk
+		sub.l	#P,d0
+		cmp.l	#32,d0			; let's assume no instruction is longer than 32bytes ;)
+		blo.b	.sizeOk
+		move.w	#$ffff,d0
+.sizeOk
 		move.w	d0,InstructionSize
 
-		move.l	UserStack(pc),a0
+		move.l	SystemStack(pc),a7
+
+		move.l	(sp)+,a0
 		move.l	a0,USP
 
-;		eor.w	#$1000,sr		; enable ISP
-;		move.l	InterruptStack(pc),a7
-;		eor.w	#$1000,sr		; disable ISP
+		move.l	(sp)+,a0
+		eor.w	#$1000,sr		; enable ISP
+		move.l	a0,a7
+		eor.w	#$1000,sr		; disable ISP
 
-		move.l	SuperStack(pc),a7
-
-;		bsr.w	RestoreVectors
+		bsr.b	CalcMemoryChecksum
+		bsr.w	RestoreVectors
 
 		movem.l	(sp)+,d0-a6
 		rte
 
-SuperStack	dc.l	0
-InterruptStack	dc.l	0
-UserStack	dc.l	0
 
 ClearState	lea	State(pc),a0
 		moveq.l	#(StateEnd-State)/4-1,d7
@@ -246,27 +325,45 @@ ClearState	lea	State(pc),a0
 		dbf	d7,.clear
 		rts
 
-RecordMemoryCRC32
+;; ----------------------------------------------------------------------------
+
+CalcMemoryChecksum
 		movem.l	d0-a6,-(a7)
 
+	; Reset state
 		moveq.l	#-1,d0
-		bsr	FeedCyclicSum ;FeedCRC32
+		bsr	FeedCyclicSum
 
-;		lea	0.w,a0
-;		move.l	#48*4,d0
-;		bsr	FeedCyclicSum ;FeedCRC32
+	; Feed in the exception vectors
+		lea	0.w,a0
+		move.l	#48*4,d0
+		bsr	FeedCyclicSum
+
+	; Feed in the *user* sandbox (8 An) - i.e. not including SSP!
 
 		lea	BASE_ADDRESS,a0
-		move.l	#REG_An_SANDBOX,d0
-		bsr	FeedCyclicSum ;FeedCRC32
+		move.l	#REG_An_DELTA*(REG_An_START+8),d0
+		bsr	FeedCyclicSum
 
-		move.l	d0,MemoryCRC32
+		eor.l	d0,MemoryState
 
 		movem.l	(a7)+,d0-a6
 		rts
 
-MemoryCRC32	dc.l	0
+CalcSuperStackChecksum
+		movem.l	d1-a6,-(a7)
 
+	; Reset state w/ seed
+		move.l	RegState_SSP,FeedCyclicSum\.crc
+
+	; Feed in the *super* - i.e. only the SSP area!
+
+		lea	REG_SSP-REG_An_DELTA,a0
+		move.l	#REG_An_DELTA*2,d0
+		bsr	FeedCyclicSum
+
+		movem.l	(a7)+,d1-a6
+		rts
 
 FeedCyclicSum:	cmp.l	#-1,d0
 		bne.b	.start
@@ -278,44 +375,13 @@ FeedCyclicSum:	cmp.l	#-1,d0
 
 		lsr.l	#2,d0
 		move.l	.crc(pc),d1
-		move.l	#$edb88320,d2
-		bra.b	.go
-.calc:
-		add.l	(a0)+,d1
-		eor.l	d2,d1
-		swap	d1
-
-.go		subq.l	#1,d0
-		bpl.b	.calc
-
-		move.l	d1,.crc
-		move.l	d1,d0
-
-		movem.l	(sp)+,d1-d5/a0
-
-.out:		not.l	d0
-		rts
-
-.crc	dc.l	0
-
-FeedCRC32:	cmp.l	#-1,d0
-		bne.b	.start
-
-		move.l	d0,.crc
-		bra.w	.out
-
-.start		movem.l	d1-d5/a0,-(sp)
-
-		move.l	.crc(pc),d1
-		moveq.l	#0,d2
-		moveq.l	#1,d3
+		moveq.l	#$1,d3
 		move.l	#$edb88320,d4
 		bra.b	.go
 .calc:
-		move.b	(a0)+,d2
+		move.l	(a0)+,d2
 		eor.l	d2,d1
 
-	rept	8
 		move.l	d1,d5
 		and.l	d3,d5
 		neg.l	d5
@@ -324,7 +390,6 @@ FeedCRC32:	cmp.l	#-1,d0
 		and.l	d4,d5
 
 		eor.l	d5,d1
-	endr
 
 .go		subq.l	#1,d0
 		bpl.b	.calc
@@ -339,22 +404,26 @@ FeedCRC32:	cmp.l	#-1,d0
 
 .crc	dc.l	0
 
+
+;; ----------------------------------------------------------------------------
+
 WriteCompactState
 	; a0.l = state
 	;
 	; compare current state against the 'ideal' state
 	; output 16 bytes compact mode state
 	;
-	; VECT|TRAP + SR|Isize + An&Dn + CRC32mem
+	; opcode	WORD
+	; registers	WORD
+	; vectors	LONG
+	; status	WORD
+	; opcode size	WORD
+	; memory check	WORD
+	; stach sum	WORD
 	;
 		movem.l	d0-d1,-(sp)
 
-		move.w	VectorState(pc),(a0)
-		move.w	TrapState(pc),2(a0)
-		move.w	StatusRegister(pc),4(a0)
-		move.w	InstructionSize(pc),6(a0)
-
-;		move.l	d0,12(a0)
+		move.w	d0,(a0)				; current opcode
 
 		moveq.l	#0,d0
 		moveq.l	#1,d1
@@ -383,45 +452,27 @@ CompareReg	MACRO
 		CompareReg	REG_A5,RegState_A5
 		CompareReg	REG_A6,RegState_A6
 		CompareReg	REG_USP,RegState_USP
-		CompareReg	REG_SSP,RegState_SSP
 
-		move.l	d0,8(a0)
+		move.w	d0,2(a0)			; register state
 
-		move.l	MemoryState(pc),12(a0)
+		move.w	VectorState(pc),4(a0)		; vector state
+		move.w	TrapState(pc),6(a0)		; trap state
+
+		move.w	StatusRegister(pc),8(a0)	; status register
+		move.w	InstructionSize(pc),10(a0)	; opcode length (or -1)
+
+		move.w	MemoryState(pc),12(a0)		; user memory checksum
+
+		bsr.w	CalcSuperStackChecksum
+		move.w	d0,14(a0)			; super stack checksum
 
 		movem.l	(sp)+,d0-d1
 		rts
 
-		cnop	0,4
-State:	
-VectorState:	dc.w	0
-TrapState:	dc.w	0
-StatusRegister	dc.w	0
-InstructionSize:dc.w	0
-ProgramCounter:	dc.l	0
-MemoryState	dc.l	0
-RegState_D0	dc.l	0
-RegState_D1	dc.l	0
-RegState_D2	dc.l	0
-RegState_D3	dc.l	0
-RegState_D4	dc.l	0
-RegState_D5	dc.l	0
-RegState_D6	dc.l	0
-RegState_D7	dc.l	0
-RegState_A0	dc.l	0
-RegState_A1	dc.l	0
-RegState_A2	dc.l	0
-RegState_A3	dc.l	0
-RegState_A4	dc.l	0
-RegState_A5	dc.l	0
-RegState_A6	dc.l	0
-RegState_SSP	dc.l	0
-RegState_USP	dc.l	0
-		cnop	0,4
-StateEnd:
+;; ----------------------------------------------------------------------------
 
 SetupRegisters:
-		move.l	(a7)+,REG_SSP-4
+		move.l	(a7)+,.return+2
 		move.l	#REG_D0,d0
 		move.l	#REG_D1,d1
 		move.l	#REG_D2,d2
@@ -441,21 +492,19 @@ SetupRegisters:
 		movea.l	#REG_USP,a7
 		move.l	a7,USP
 		eor.w	#$1000,sr		; enable ISP
-		movea.l	#REG_SSP-4,a7		; == ISP
+		movea.l	#REG_SSP,a7		; == ISP
 		eor.w	#$1000,sr		; disable ISP
-		movea.l	#REG_SSP-4,a7		; == SSP
+		movea.l	#REG_SSP,a7		; == SSP
 
 		; Fake exception frame
 
-		move.w	#$0000,REG_SSP
-		move.l	#Execute\.p+2,REG_SSP+2
+		move.w	#$2700,REG_SSP
+		move.l	#P+2,REG_SSP+2
 
 		move	#0,ccr
-		rts
+.return		jmp	$0.l
 
-CompareRegisters:
-		rts
-
+;; ----------------------------------------------------------------------------
 
 ClearMemory:
 		movem.l	d0-d4/a0-a4,-(sp)
@@ -480,6 +529,8 @@ ClearMemory:
 		movem.l	(sp)+,d0-d4/a0-a4
 		rts
 
+;; ----------------------------------------------------------------------------
+
 SaveVectors:	lea	$0.w,a0			; assume VBR = 0
 		lea	SystemVectors(pc),a1
 		moveq.l	#32+16-1,d7
@@ -494,53 +545,65 @@ RestoreVectors	lea	0.w,a0
 		dbf	d7,.restoreVecs
 		rts
 
-SystemVectors:	ds.l	32+16
 
+;; ----------------------------------------------------------------------------
 
 SetupExceptionHandlers:
 
-;		lea	$8.w,a0
-;		moveq.l	#10-1,d7
-;		lea	Vector2(pc),a1
-;.initVectors:	move.l	a1,(a0)+
-;		adda.w	#Vector3-Vector2,a1		
-;		dbf	d7,.initVectors
-;
-;		lea	$80.w,a0
-;		moveq.l	#16-1,d7
-;		lea	Trap0(pc),a1
-;.initTraps:	move.l	a1,(a0)+
-;		adda.w	#Trap1-Trap0,a1		
-;		dbf	d7,.initTraps
+	; Install our custom handlers (Exceptions + Traps)
 
-
-		move.l	#EmptyHandler,d0
-		lea	$0.w,a0
-		move.l	d0,(a0)+		; Reset SP
-		move.l	d0,(a0)+		; Reset PC
 		moveq.l	#10-1,d7
+		lea	$8.w,a0
 		lea	Vector2(pc),a1
 .initVectors:	move.l	a1,(a0)+		; Vector2 - Vector11
 		adda.w	#Vector3-Vector2,a1
 		dbf	d7,.initVectors
  
-		moveq.l	#20-1,d7
-.initDummies	move.l	d0,(a0)+		; Vector20 - Vector31
-		dbf	d7,.initDummies
 
 		moveq.l	#16-1,d7
+		lea	$80.w,a0
 		lea	Trap0(pc),a1
 .initTraps:	move.l	a1,(a0)+		; Vector32 - Vector47
 		adda.w	#Trap1-Trap0,a1
 		dbf	d7,.initTraps
 
+	; Wrap all (48) vectors so we have defined/known memory contents at address $0
+
+		lea	$0.w,a0
+		lea	WrapHandlers(pc),a1
+
+WrapVector	MACRO
+		move.l	(a0),2(a1)
+		move.l	a1,(a0)+
+		addq.l	#6,a1
+		ENDM
+
+		moveq.l	#48-1,d7
+.initWraps	WrapVector			; Vector0 - Vector47
+		dbf	d7,.initWraps
+
 		rts
 
-EmptyHandler	rte		
+Counter		dc.l	0
+DumpStack	ds.l	32
 
+		cnop	0,4
 ExceptionHandler:
-	; TODO - detect 000 bus/address exception frame ; NON-STANDARD!
+		add.l	#1,Counter
+		move.l	0(sp),DumpStack+0
+		move.l	4(sp),DumpStack+4
+		move.l	8(sp),DumpStack+8
+		move.l	12(sp),DumpStack+12
+		move.l	16(sp),DumpStack+16
+		move.l	20(sp),DumpStack+20
+		move.l	24(sp),DumpStack+24
 
+		btst	#2,VectorState+1	; Bus error
+		bne.b	.busOrAddrErr
+		btst	#3,VectorState+1	; Address error
+		bne.b	.busOrAddrErr
+
+.notBusError68k
 		move.w	(sp),StatusRegister
 		move.l	2(sp),ProgramCounter
 
@@ -555,30 +618,40 @@ ExceptionHandler:
 	; When TRACEing in SUPER, the instruction might do all sort of weirdness to SR
 	; As long as the PC matches something around the instruction being TRACEd we're good
 
-		cmp.l	#Execute\.p+0,2(sp)
+		cmp.l	#P+0,2(sp)
 		beq.b	.notTrace
-		cmp.l	#Execute\.p+2,2(sp)
+		cmp.l	#P+2,2(sp)
 		beq.b	.notTrace
-		cmp.l	#Execute\.p+4,2(sp)
+		cmp.l	#P+4,2(sp)
 		beq.b	.notTrace
-		cmp.l	#Execute\.p+6,2(sp)
+		cmp.l	#P+6,2(sp)
 		beq.b	.notTrace
 
 		rte				; ignore this exception and continue
 
-.notTrace	add.l	#1,ExceptionCounter
-
+.notTrace
 		suba.l	#8,sp			; create new exception frame
 		move.w	8(sp),(sp)		; copy SR
 		move.l	10(sp),2(sp)		; copy PC
 		move.w	#$0000,6(sp)		; indicate 4-word stack frame
 
-		or.w	#$2000,(sp)		; re-enable SUPER
+.busError68k	or.w	#$2000,(sp)		; re-enable SUPER
 		and.w	#$2fff,(sp)		; disable TRACE
-		move.l	#Cleanup,2(sp)		; 
+		move.l	#Cleanup,2(sp)		; .. and bounce back
 		rte
 
-ExceptionCounter	dc.l	0
+.busOrAddrErr	btst	#6,(sp)			; T0 - not used
+		beq.b	.notBusError68k		; not a 68000 exception frame
+
+		suba.l	#6,sp			; create new exception frame
+		move.w	14(sp),(sp)		; copy SR
+		move.l	16(sp),2(sp)		; copy PC
+
+		move.w	(sp),StatusRegister
+		move.l	2(sp),ProgramCounter
+
+		bra.b	.busError68k
+
 
 CreateVector:	MACRO
 		ori.w	#1<<(\1),VectorState
@@ -618,8 +691,72 @@ Trap13:		CreateTrap	13
 Trap14:		CreateTrap	14
 Trap15:		CreateTrap	15
 
+
+		cnop	0,4
+
+SuperStack	dc.l	0
+SystemStack	dc.l	0
+SystemVectors:	ds.l	32+16
+
+		cnop	0,256
+WrapHandlers
+	rept	48
+		jmp	$0.l
+	endr
+
+;; ----------------------------------------------------------------------------
+
+		cnop	0,4
+State:	
+VectorState:	dc.w	0
+TrapState:	dc.w	0
+StatusRegister	dc.w	0
+InstructionSize:dc.w	0
+ProgramCounter:	dc.l	0
+MemoryState	dc.l	0
+RegState_D0	dc.l	0
+RegState_D1	dc.l	0
+RegState_D2	dc.l	0
+RegState_D3	dc.l	0
+RegState_D4	dc.l	0
+RegState_D5	dc.l	0
+RegState_D6	dc.l	0
+RegState_D7	dc.l	0
+RegState_A0	dc.l	0
+RegState_A1	dc.l	0
+RegState_A2	dc.l	0
+RegState_A3	dc.l	0
+RegState_A4	dc.l	0
+RegState_A5	dc.l	0
+RegState_A6	dc.l	0
+RegState_USP	dc.l	0
+RegState_SSP	dc.l	0
+		cnop	0,4
+StateEnd:
+
 E:
 
+;; ----------------------------------------------------------------------------
+
+	; ORG this separately so that code changes don't ripple through
+		org	$31000
+
+InitSR:		move.w	#$ffff,sr		; dummy write - smc
+P:		dc.l	0,0,0,0,0,0
+
+
+;; ----------------------------------------------------------------------------
+
+
+	IFNE	RECORD
+	section opc,bss_f
+
+Compact		ds.b	OPCODE_COUNT*16	; 4 longs per op, in compact mode
+
+	ELSE
+	
 	section opc,data_f
 
-Compact		dcb.b	2*OPCODE_COUNT*16,$00	; 4 longs per op, in compact mode
+Compact		incbin	"sys:opcode.020nofpu.bin"
+
+	ENDC
